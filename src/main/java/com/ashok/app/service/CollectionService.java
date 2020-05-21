@@ -10,40 +10,79 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedList;
 import java.util.List;
 
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import org.springframework.stereotype.Component;
 
+import com.ashok.app.Main;
 import com.ashok.app.service.DataService;
 
 @Component
 public class CollectionService {
 
+	final String PORT_NO = "1883";
 	URLConnection connectReq;
+	MqttClient client;
 	URL urlObj;
 	List<String> url = new ArrayList<String>();
+	List<DataService> payload = new LinkedList<DataService>();
 
-	public void startProcess() {
+	public void startProcess() throws MqttException {
 		url.add("http://uoweb3.ncl.ac.uk/api/v1.1/sensors/PER_AIRMON_MESH1911150/data/json/?");
 		url.add("http://uoweb3.ncl.ac.uk/api/v1.1/sensors/PER_AIRMON_MESH301245/data/json/?");
 		url.add("http://uoweb3.ncl.ac.uk/api/v1.1/sensors/PER_EMOTE_1309/data/json/?");
 		try {
 
 			for (String data : url) {
-				new CollectionService().getRawData(data);
+				getRawData(data);
+			}
+			boolean repeat = true;
+			int retry = 0;
+			while (repeat) {
+				try {
+					client = new MqttClient("tcp://" + Main.getIpAddress() + ":" + PORT_NO, "datacoll");
+					MqttConnectOptions connOpts = new MqttConnectOptions();
+					connOpts.setCleanSession(false); // If clean session not needed set to false
+					connOpts.setKeepAliveInterval(60);
+					client.connect();
+					repeat = false;
+
+				} catch (Exception e) {
+					retry += 1;
+					if (retry <= 4) {
+						System.out.println("MQTT Connection lost. Retry no: " + retry);
+						repeat = true;
+					} else {
+						break;
+					}
+				}
+			}
+
+			for (DataService data : payload) {
+				String payloadFmt = data.getName() + "," + data.getVariable() + "," + data.getUnits() + ","
+						+ data.getDate() + "," + data.getFlag() + "," + data.getValue();
+				MqttMessage message = new MqttMessage(payloadFmt.getBytes());
+				message.setQos(0);
+				client.publish("datacoll", message);
+
 			}
 		}
 
 		catch (Exception e) {
-
+			System.out.println(e.getMessage());
 		}
+		System.out.println("Process Complete..");
 	}
 
 	public void getRawData(String reqUrl) throws IOException {
-//		System.out.println("I am here");
 		int repeat = 0, retry = 0;
 		while (repeat == 0) {
 			try {
@@ -107,7 +146,8 @@ public class CollectionService {
 						dataService.setFlag(flag);
 						dataService.setValue(value);
 						dataService.setDate(formattedDate);
-						System.out.println(dataService.toString());
+						payload.add(dataService);
+
 					}
 				}
 			} catch (NullPointerException e) {
